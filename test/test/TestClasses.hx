@@ -12,9 +12,10 @@ interface SimpleInterface
 
 class SimpleClass
 {
+	
 	public function new()
 	{
-		throw "not mocked";
+		
 	}
 
 	public function test()
@@ -205,13 +206,29 @@ class ExtendsTypedExtensionClass extends ExtendsTypedClass<String, String>
 	}	
 }
 
-typedef TypedefToSimpleInterface = SimpleInterface;
-typedef TypedefToSimpleClass = SimpleClass;
-typedef TypedefToStringTypedInterface = TypedInterface<String>;
-typedef TypedefToStringTypedClass = TypedClass<String>;
+class TypedIterableClass<T>
+{
+	var source:Array<T>;
+	public function new()
+	{
+		source = [];
+	}
 
-typedef TypedefToImplementsTypedInterface = ImplementsTypedInterface<String, String>;
-typedef TypedefToExtendsTypedClass = ExtendsTypedClass<String, String>;
+	public function iterator():Iterator<Null<T>>
+	{
+		return source.iterator();
+	}
+}
+
+class IntIterableClass extends TypedIterableClass<Int>
+{
+	public function new()
+	{
+		super();
+	}
+}
+
+// ---------------------- others
 
 class ClassWithPrivateReference
 {
@@ -233,4 +250,177 @@ private class PrivateClass
 	{
 		
 	}
+}
+
+
+class ClassWithOptionalArg
+{
+	public function new()
+	{
+
+	}
+
+	public function foo(value:Bool=false):String
+	{
+		return "";
+	}
+
+	public function foo2(?value:Bool=false):String
+	{
+		return "";
+	}
+}
+
+
+class ClassWithTypedConstraint<T:Array<Dynamic>>
+{
+	public function new()
+	{
+
+	}
+	public function test():String
+	{
+		return "";
+	}
+}
+
+class ClassWithMultipleTypedConstraints<T:(TypedConstraintFoo,TypedConstraintBar)>
+{
+	public function new()
+	{
+
+	}
+
+	public function test():String
+	{
+		return "";
+	}
+}
+
+class TypedConstraintFoo
+{
+	public function new()
+	{
+		
+	}
+
+	public function foo()
+	{
+
+	}
+}
+
+interface TypedConstraintBar
+{
+	function bar():Void;
+}
+
+class TypedConstraintFooBar extends TypedConstraintFoo, implements TypedConstraintBar
+{
+	public function new()
+	{
+		super();
+	}
+
+	public function fooBar()
+	{
+		
+	}
+
+	public function bar()
+	{
+		
+	}
+}
+
+
+
+class BaseTypedParam<T>
+{
+	public function new()
+	{
+
+	}
+}
+
+class ConcreteTypedParam<T> extends BaseTypedParam<T>
+{
+	public function new()
+	{
+		super();
+	}
+}
+
+typedef AnyConcreteTypedParam = ConcreteTypedParam<Dynamic>;
+
+// ----------------------------------------------------------------------------- Properties
+
+class ClassWithProperties
+{
+	public var property:String;
+
+	public var readOnly(default, null):String;
+	
+	public var setter(default, set_setter):String;
+	
+	public var never(default, never):String;
+
+	public var func:Void->String;
+
+	function set_setter(value:String)
+	{
+		setter = value;
+		return value;
+	}
+
+	public var getterSetter(get_getterSetter, set_getterSetter):String;
+	
+	function get_getterSetter():String
+	{
+		return getterSetter;
+	}
+
+	function set_getterSetter(value:String)
+	{
+		getterSetter = value;
+		return value;
+	}
+
+	public function new()
+	{
+		
+	}
+
+}
+// ----------------------------------------------------------------------------- Typedef Aliases
+
+
+typedef TypedefToSimpleInterface = SimpleInterface;
+typedef TypedefToSimpleClass = SimpleClass;
+typedef TypedefToStringTypedInterface = TypedInterface<String>;
+typedef TypedefToStringTypedClass = TypedClass<String>;
+
+typedef TypedefToImplementsTypedInterface = ImplementsTypedInterface<String, String>;
+typedef TypedefToExtendsTypedClass = ExtendsTypedClass<String, String>;
+
+
+
+// ----------------------------------------------------------------------------- Typedef Structures
+
+
+typedef TypedefStructure = 
+{
+	var title:String;
+	var func:Void->String;
+	var type:SomeEnumType;
+	
+	@:optional var optionalTitle:String;
+	@:optional var optionalFunc:Void -> String;
+}
+
+
+enum SomeEnumType
+{
+	foo;
+	bar;
 }

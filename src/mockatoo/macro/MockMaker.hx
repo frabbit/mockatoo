@@ -19,6 +19,8 @@ using tink.macro.tools.ExprTools;
 using tink.macro.tools.TypeTools;
 using tink.core.types.Outcome;
 
+using mockatoo.macro.Types;
+
 
 #if !haxe_211
 typedef TypeParamDecl = {
@@ -29,13 +31,20 @@ typedef TypeParamDecl = {
 
 #end
 
+typedef PropertyMeta = 
+{
+	var get:String;
+	var set:String;
+	var name:String;
+}
+
 /**
 Macro class that generates a Mock implementation of a class or interface
 */
 class MockMaker
 {
-
 	static var mockedClassHash:Hash<String> = new Hash();
+	static var eNull:Expr = EConst(CIdent("null")).at();
 
 	var expr:Expr;
 	var pos:Position;
@@ -43,32 +52,40 @@ class MockMaker
 	var type:Type;
 	var actualType:Type;
 
+	var isSpy:Bool;
+
 	var classType:ClassType;
 	var params:Array<Type>;
 
 	var isInterface:Bool;
-
 
 	var extendTypePath:TypePath;
 
 	var typeDefinition:TypeDefinition;
 	var typeDefinitionId:String;
 
-
 	var hasConstructor = false;
 
+	var generatedExpr:Expr;
 
-	public function new(e:Expr, ?paramTypes:Expr)
+
+	var propertyMetas:Array<PropertyMeta>;
+
+	public function new(e:Expr, ?paramTypes:Expr, isSpy:Bool=false)
 	{
 		expr = e;
 		id = e.toString();
+
+		this.isSpy = isSpy;
 
 		pos = e.pos;
 
 		type = Context.getType(e.toString());
 		actualType = type.reduce();
 
-		id = actualType.getID().split(".").pop();
+		Console.log(id);
+		Console.log(type);
+		Console.log(actualType);
 
 		params = [];
 
@@ -88,11 +105,88 @@ class MockMaker
 			}
 		}
 
-		trace("expr: " + expr);
-		trace("id: " + id);
-		trace("type: " + type);
-		trace("actual: " + actualType);
 
+		switch(actualType)
+		{
+			case TAnonymous(a):
+				createMockFromStruct(a.get().fields);
+			case TInst(t, params):
+				id = actualType.getID().split(".").pop();
+				createMockFromClass();
+			default:
+				throw new mockatoo.exception.MockatooException("Unsupported type [" + id + "]. Cannot mock");
+		}
+	}
+
+	/**
+	Returns the generated expr instanciating an instance of the mock
+	*/
+	public function toExpr():Expr
+	{
+		if(generatedExpr == null)
+		{
+			var typeParams = untyped TypeTools.paramsToComplex(params);
+			var eIsSpy = EConst(CIdent(Std.string(isSpy))).at();
+			generatedExpr = ExprTools.instantiate(typeDefinitionId, [eIsSpy], typeParams, pos);
+		}
+
+		Console.log(Printer.print(generatedExpr));
+		return generatedExpr;	
+		
+	}
+
+	/**
+	Generates a dynamic object matching a TypeDef structure
+	*/
+	function createMockFromStruct(fields:Array<ClassField>)
+	{
+		var args:Array<{ field : String, expr : Expr }> = [];
+
+		var arg:{ field : String, expr : Expr };
+
+		for(field in fields)
+		{
+			Console.log(field.name);
+			arg = {field:field.name, expr:null};
+
+			switch(field.type)
+			{
+				case TInst(t, tparams):
+					arg.expr = field.type.toComplex(true).defaultValue();
+				case TType(t, tparams):
+					arg.expr = field.type.toComplex(true).defaultValue();
+				case TEnum(t, tparams):
+					arg.expr = field.type.toComplex(true).defaultValue();
+				case TFun(functionArgs, ret):
+					var e = field.type.toComplex(true).defaultValue();
+					var fargs:Array<FunctionArg> = [];
+
+					for(a in functionArgs)
+					{
+						fargs.push(FunctionTools.toArg(a.name, a.t.toComplex(true),a.opt));
+					}
+
+					var f = FunctionTools.func(e, fargs, ret.toComplex(true), [], true);
+					arg.expr = EFunction(null, f).at();
+
+				default: throw "Unsupported type [" + field.type + "] for field [" + field.name + "]";
+			}
+
+			args.push(arg);
+		}
+		generatedExpr = EObjectDecl(args).at(pos);
+	}
+
+	/**
+	Creates a class definition for a mocked class or interface 
+	*/
+	function createMockFromClass()
+	{
+		Console.log("expr: " + expr);
+		Console.log("id: " + id);
+		Console.log("type: " + type);
+		Console.log("actual: " + actualType);
+		
 		switch(actualType)
 		{
 			case TInst(t, typeParams):
@@ -107,39 +201,30 @@ class MockMaker
 		if(mockedClassHash.exists(id))
 		{
 			typeDefinitionId = mockedClassHash.get(id);
-			trace("existing: " + id + ", " + typeDefinitionId);
+			Console.log("existing: " + id + ", " + typeDefinitionId);
 			return;
 		}
 
 		isInterface = classType.isInterface;
 
-		trace("params: " + params);
-		trace("class " +  classType.name);
-		trace("   interface: " + isInterface);
-		trace("   params: " + classType.params);
-		trace("   pos: " + classType.pos);
-		trace("   module: " + classType.module);
+		if(isInterface) isSpy = false;
+		Console.log("params: " + params);
+		Console.log("isSpy " +  isSpy);
+		Console.log("class " +  classType.name);
+		Console.log("   interface: " + isInterface);
+		Console.log("   params: " + classType.params);
+		Console.log("   pos: " + classType.pos);
+		Console.log("   module: " + classType.module);
 
 		typeDefinition = createTypeDefinition();
 		typeDefinitionId = (typeDefinition.pack.length > 0 ? typeDefinition.pack.join(".")  + "." : "") + typeDefinition.name;
 
 		debugPrintClass();
-		
 
 		Context.defineType(typeDefinition);
 
 		mockedClassHash.set(id, typeDefinitionId);
-	}
 
-	/**
-	Returns the expr instanciating an instance of the mock
-	*/
-	public function toExpr():Expr
-	{
-		var typeParams = untyped TypeTools.paramsToComplex(params);
-		var expr = ExprTools.instantiate(typeDefinitionId, null, typeParams, pos);
-		trace(Printer.print(expr));
-		return expr;
 	}
 
 	function isNotNull(expr:Expr):Bool
@@ -166,13 +251,34 @@ class MockMaker
 	*/
 	function createTypeDefinition():TypeDefinition
 	{
+		propertyMetas = [];
 		var paramTypes:Array<TypeParamDecl> = [];
-		for(param in classType.params)
+
+		Console.log("classType.params:" + classType.params);
+		
+		for(i in 0...classType.params.length)
 		{
-			paramTypes.push({name:param.name, constraints:[]});
+			var param = classType.params[i];
+
+			var constraints:Array<ComplexType> = [];
+			switch(param.t)
+			{
+				case TInst(t, ps):
+				{
+					if(t.get().kind == ClassKind.KTypeParameter && t.get().interfaces.length > 0)
+					{
+						Console.log(t.get());
+						if(params[i] != null)
+							constraints.push(params[i].toComplex(true));//issue #12 - support typed constraints
+					}
+				}
+				default: null;
+			}
+
+			paramTypes.push({name:param.name, constraints:constraints});
 		}
 
-		//trace(paramTypes);
+		Console.log("paramTypes:" + paramTypes);
 
 		var a:Array<Type> = [];
 		for(p in classType.params)
@@ -181,13 +287,13 @@ class MockMaker
 		}
 		var typeParams = untyped TypeTools.paramsToComplex(a);
 
-		trace(typeParams);
+		Console.log(typeParams);
 
 		var extendId = classType.module + "." + classType.name;
 
 		extendTypePath = TypeTools.asTypePath(extendId, typeParams);
 
-		trace(extendTypePath);
+		Console.log(extendTypePath);
 
 
 		var kind = createKind();
@@ -199,6 +305,47 @@ class MockMaker
 
 
 		var metas = updateMeta(classType.meta.get());
+
+		if(Context.defined("flash"))
+		{
+			var skip = false;
+			for(m in metas)
+			{
+				if(m.name == ":hack")
+				{
+					skip = true;
+					break;
+				}
+			}
+
+			if(skip)
+			{
+				Context.error("Cannot mock final class [" + id + "] on flash target.", Context.currentPos());
+				return null;
+			}
+		}
+
+	
+
+		var eProps:Array<Expr> = [];
+
+		for(prop in propertyMetas)
+		{
+			var args = [];
+			for (field in Reflect.fields(prop))
+				args.push( { field:field, expr: EConst(CString(Reflect.field(prop, field))).at() } );
+			var eObject = EObjectDecl(args).at();
+			eProps.push(eObject);
+		}
+
+		metas.push(
+		{
+			pos:Context.currentPos(),
+			name:"mockatooProperties",
+			params: eProps
+		});
+
+
 		metas.push({
 			pos:Context.currentPos(),
 			name:"mockatoo",
@@ -238,7 +385,6 @@ class MockMaker
 			}
 		}
 
-
 		preview += "class " + id + "Mocked " + (isInterface?"implements":"extends") + " " + id;
 		preview += "\n{";
 
@@ -257,8 +403,7 @@ class MockMaker
 
 		preview += "\n}";
 
-		trace(preview);
-
+		Console.log(preview);
 	}
 
 	function updateMeta(source:Metadata):Metadata
@@ -267,7 +412,7 @@ class MockMaker
 
 		for(meta in source)
 		{
-			trace(meta.name + ":" + Printer.printExprList("", meta.params));
+			Console.log(meta.name + ":" + Printer.printExprList("", meta.params));
 
 			switch(meta.name)
 			{
@@ -279,10 +424,7 @@ class MockMaker
 					metadata.push(meta);
 			}
 		}
-
 		
-		//metadata.push({pos:Context.currentPos(), name:":extern", params:[]});
-
 		return metadata;
 	}
 
@@ -302,7 +444,7 @@ class MockMaker
 		}
 		else
 		{
-			trace(extendTypePath);
+			Console.log(extendTypePath);
 			extension = extendTypePath;
 			interfaces = [mockInterface];
 		}
@@ -330,6 +472,7 @@ class MockMaker
 
 		for(field in superFields)
 		{
+
 			field.meta = updateMeta(field.meta);
 
 			switch(field.kind)
@@ -356,7 +499,27 @@ class MockMaker
 						#else
 							Context.warning("Cannot mock inline method [" + id + "." + field.name + "] please upgrade to Haxe 2.11 and set '--no-inline' compiler flag (See http://code.google.com/p/haxe/issues/detail?id=1231)", Context.currentPos());
 						#end
+
+						continue;
 						
+					}
+
+					if(Context.defined("flash"))
+					{
+						var skip = false;
+						for(m in field.meta)
+						{
+							if(m.name == ":hack")
+							{
+								skip = true;
+								break;
+							}
+						}
+
+						if(skip)
+							Context.warning("Cannot mock final method [" + id + "." + field.name + "] on flash target.", Context.currentPos());
+						else
+							fields.push(field);
 					}
 					else
 					{
@@ -367,6 +530,13 @@ class MockMaker
 					if(isInterface) fields.push(field);
 				case FProp(get, set, t, e):
 					if(isInterface) fields.push(field);
+
+					var getMethod = toGetterSetter(get);
+					var setMethod = toGetterSetter(set);
+
+					if(getMethod != "" || setMethod != "")
+						propertyMetas.push({name:field.name, set:setMethod, get:getMethod});
+
 			}
 		}
 
@@ -374,6 +544,18 @@ class MockMaker
 		
 		return fields;
 	}
+
+	function toGetterSetter(value:String):String
+	{
+		switch(value)
+		{
+			case "default", "null", "never": return "";
+			case "dynamic": throw "Not implemented";
+			default: return value;
+		}
+		return "";
+	}
+
 
 	/**
 	Appends the fields required by the <code>mockatoo.Mock</code> interface
@@ -410,7 +592,7 @@ class MockMaker
 		field.access.push(APublic);
 
 		var eMockConstructorExprs = createMockConstructorExprs();
-		var eReturn = EReturn().at();
+		var eReturn = isSpy ? eNull : EReturn().at();
 		var e = EConst(CIdent("super")).at();
 
 		if(f.args.length == 0)
@@ -423,8 +605,8 @@ class MockMaker
 
 			for(arg in f.args)
 			{
-				trace(arg);
-				var argExpr = getDefaultValueForType(arg.type);
+				Console.log(arg);
+				var argExpr = arg.type.defaultValue();
 				args.push(argExpr);
 			}
 			e = e.call(args);
@@ -432,6 +614,15 @@ class MockMaker
 			//remove super arg paramaters from constructor
 			f.args = [];
 		}
+
+		var spyArg = {
+			value: EConst(CIdent("false")).at(),
+			type: TPath({sub:null,params:[],pack:[],name:"Bool"}),
+			opt:true,
+			name:"spy"
+		}
+
+		f.args.push(spyArg);
 
 		//deliberately call return before call to super
 		//to prevent target class constructor being executed
@@ -442,7 +633,8 @@ class MockMaker
 	{
 		//create mockProxy instance
 		var eThis =  EConst(CIdent("this")).at();
-		var eInstance = "mockatoo.internal.MockProxy".instantiate([eThis]);
+		var eSpy = EConst(CIdent("spy")).at();
+		var eInstance = "mockatoo.internal.MockProxy".instantiate([eThis,eSpy]);
 		return EConst(CIdent("mockProxy")).at().assign(eInstance);
 	}
 
@@ -454,36 +646,87 @@ class MockMaker
 		if(!isInterface)
 		field.access.unshift(AOverride);
 
+
+		var args = getFunctionArgIdents(f);
+
+		var eMockOutcome = createMockFieldExprs(field, args);
+		var eCaseReturns = macro MockOutcome.returns(v);
+		var eCaseThrows = macro MockOutcome.throws(v);
+		var eCaseCalls = macro MockOutcome.calls(v);
+		var eCaseStubs = macro MockOutcome.stubs;
+		var eCaseReal = macro MockOutcome.callsRealMethod;
+		var eCaseNone = macro MockOutcome.none;
+
+		var eArgs = args.toArray(); //reference to args
+
+		var eIsSpy = "mockProxy.spy".resolve();
+
+		var eSwitch:Expr = null;
+
 		if(f.ret != null && !StringTools.endsWith(TypeTools.toString(f.ret), "Void"))
 		{
-
 			f.ret = normaliseReturnType(f.ret);
 
-			trace(field.name + ":" + Std.string(f.ret));
+			Console.log(field.name + ":" + Std.string(f.ret));
+		
+			var eDefaultReturnValue = f.ret.defaultValue(); //default return type (usually 'null')
+
+			var eSuper =  ("super." + field.name).resolve().call(args);
+
+			if(isInterface)
+				eSuper = eDefaultReturnValue;
 
 
-			
-			var mockCall = createMockFieldExprs(field, f);
-			var ereturn = EReturn(mockCall).at();
-			f.expr = createBlock([ereturn]);
+			var eIf:Expr = macro $eIsSpy ? $eSuper : $eDefaultReturnValue;
+
+			eSwitch = macro switch($eMockOutcome)
+			{
+				case $eCaseReturns: return v;
+				case $eCaseThrows: throw v;
+				case $eCaseCalls: return v($eArgs);
+				case $eCaseStubs: return $eDefaultReturnValue;
+				case $eCaseReal: return $eSuper;
+				case $eCaseNone: return $eIf;
+			}
 		}
 		else
 		{
-			var mockCall = createMockFieldExprs(field, f, false);
+			var eSuper =  ("super." + field.name).resolve().call(args);
 
-			f.expr = mockCall;
+			if(isInterface)
+				eSuper = eNull;
+
+			var eIf:Expr = macro $eIsSpy ? $eSuper : $eNull;
+
+			eSwitch= macro switch($eMockOutcome)
+			{
+				case $eCaseThrows: throw v;
+				case $eCaseCalls: v($eArgs);
+				case $eCaseStubs: $eNull;
+				case $eCaseReal: $eSuper;
+				default: $eIf;
+			}
 		}
+
+		f.expr = createBlock([eSwitch]);
 
 		field.kind = FFun(f);
 
-
 		var fieldMeta = createMockFieldMeta(field, f);
 		field.meta.push(fieldMeta);
+
+
+		//validate optional args
+		for(arg in f.args)
+		{
+			if(!arg.opt) continue;
+
+			Console.log(arg.name + ":" + arg.type.toString());
+		}
 	}
 
-	function createMockFieldExprs(field:Field, f:Function, ?includeReturn:Bool=true):Expr
+	function getFunctionArgIdents(f:Function)
 	{
-
 		var args:Array<Expr> = [];
 
 		for(arg in f.args)
@@ -491,21 +734,15 @@ class MockMaker
 			args.push(EConst(CIdent(arg.name)).at());
 		}
 
+		return args;
+	}
+
+	function createMockFieldExprs(field:Field, args:Array<Expr>):Expr
+	{
 		var eArgs = args.toArray(); //reference to args
 		var eName = EConst(CString(field.name)).at(); //name of current method
-		
-		if(includeReturn)
-		{
-			trace(f.ret.toString());
 
-			var eDefaultReturnValue = getDefaultValueForType(f.ret); //default return type (usually 'null')
-			trace("  " + eDefaultReturnValue.print());
-			return "mockProxy.callMethodAndReturn".resolve().call([eName, eArgs, eDefaultReturnValue]);
-		}
-		else
-		{
-			return "mockProxy.callMethod".resolve().call([eName, eArgs]);
-		}
+		return "mockProxy.getOutcomeFor".resolve().call([eName, eArgs]);
 	}
 		
 
@@ -538,7 +775,7 @@ class MockMaker
 		var args:Array<Expr> = [];
 		for(arg in f.args)
 		{
-			trace(arg);
+			Console.log(arg);
 
 			var value:String = arg.opt ? "?" : "";
 
@@ -572,66 +809,6 @@ class MockMaker
 		};
 	}
 
-	/**
-	Returns the default 'null' value for a type.
-
-	On static platforms (Flash, CPP, Java, C#), basic types have their own default values :
-
-	every Int is by default initialized to 0
-	every Float is by default initialized to NaN on Flash9+, and to 0.0 on CPP, Java and C#
-	every Bool is by default initialized to false
-	*/
-	function getDefaultValueForType(type:ComplexType):Expr
-	{
-		if(type == null)
-			return EConst(CIdent("null")).at();
-
-		var isStaticPlatform:Bool = false;
-		var isFlash:Bool = false;
-
-		var staticPlatforms = ["flash", "cpp", "java", "cs"];
-
-		for(platform in staticPlatforms)
-		{
-			if(Context.defined(platform))
-			{
-				isStaticPlatform = true;
-
-				if(platform == "flash") isFlash = true;
-				break;
-			}
-		}
-
-		if(isStaticPlatform)
-		{
-			switch(type)
-			{
-				case TPath(p):
-				{
-					if(p.pack.length != 0) return EConst(CIdent("null")).at();
-
-					if(p.name == "StdTypes") p.name = p.sub;
-
-					switch(p.name)
-					{
-						case "Bool":
-							return EConst(CIdent("false")).at();
-						case "Int":
-							return EConst(CInt("0")).at();
-						case "Float":
-							if(isFlash)
-								return "Math.NaN".resolve();
-							else
-								return EConst(CFloat("0.0")).at();
-						default: null;
-					}	
-				}
-				default: null;
-			}
-		}
-		return EConst(CIdent("null")).at();
-	}
-
 
 
 
@@ -653,7 +830,16 @@ class MockMaker
 	{	
 		var constructorExprs = createMockConstructorExprs();
 		var exprs = ExprTools.toBlock([constructorExprs]);
-		var f:Function = FunctionTools.func(exprs, null, null, null, false);
+
+
+		var arg = {
+			value: EConst(CIdent("false")).at(),
+			type: TPath({sub:null,params:[],pack:[],name:"Bool"}),
+			opt:true,
+			name:"spy"
+		}
+
+		var f:Function = FunctionTools.func(exprs, [arg], null, null, false);
 		return 
 		{
 			pos:Context.currentPos(),

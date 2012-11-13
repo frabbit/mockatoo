@@ -2,7 +2,8 @@ package mockatoo.internal;
 import mockatoo.exception.VerificationException;
 import mockatoo.exception.StubbingException;
 import mockatoo.Mockatoo;
-
+import mockatoo.internal.MockOutcome;
+import haxe.PosInfos;
 using mockatoo.util.TypeEquality;
 
 /**
@@ -34,45 +35,24 @@ class MockMethod
 		invocations = [];
 		stubbings = [];
 	}
-	
-	public function call(args:Array<Dynamic>)
+
+
+	public function getOutcomeFor(args:Array<Dynamic>):MockOutcome
 	{
 		invocations.push(args);
-
 		var stub = getStubbingForArgs(args);
-		if(stub == null) return;
-
-		switch(getActiveStubValue(stub))
-		{
-			case returns(r): throw new StubbingException("Method [" + fieldName + "] has no return type and cannot stub custom return values.");
-			case throws(e): throw e;
-			case calls(f): f(args);
-		}
+		return getActiveStubValue(stub);
 	}
 
-	function getActiveStubValue(stub:Stubbing)
+
+	function getActiveStubValue(stub:Stubbing):MockOutcome
 	{
+		if(stub == null) return none;
 		if(stub.values.length > 1)
 			return stub.values.shift();//remove if not last one;
 		return stub.values[0];
 	} 
 
-	public function callAndReturn<T>(args:Array<Dynamic>, defaultReturn:T):T
-	{
-		invocations.push(args);
-
-		var stub = getStubbingForArgs(args);
-
-		if(stub == null) return defaultReturn;
-		
-		switch(getActiveStubValue(stub))
-		{
-			case returns(r): return r;
-			case throws(e): throw e;
-			case calls(f): return f(args);
-		}
-			
-	}
 
 	public function addReturnFor<T>(args:Array<Dynamic>, values:Array<T>)
 	{
@@ -124,8 +104,32 @@ class MockMethod
 			if(!Reflect.isFunction(value))
 				 throw new StubbingException("Value [" + value + "] is not a function.");
 
-			stub.values.push( calls(value) );
+			stub.values.push(calls(value));
 		}
+	}
+
+	public function addDefaultStubFor(args:Array<Dynamic>)
+	{
+		var stub = getStubbingForArgs(args, true);
+
+		if(stub == null)
+		{
+			stub = {args:args, values:[]};
+			stubbings.push(stub);
+		}
+		stub.values.push(stubs);
+	}
+
+	public function addCallRealMethodFor(args:Array<Dynamic>)
+	{
+		var stub = getStubbingForArgs(args, true);
+
+		if(stub == null)
+		{
+			stub = {args:args, values:[]};
+			stubbings.push(stub);
+		}
+		stub.values.push(callsRealMethod);
 	}
 
 	function getStubbingForArgs(args:Array<Dynamic>, ?absoluteMatching:Bool = false):Stubbing
@@ -134,8 +138,9 @@ class MockMethod
 		{
 			if(stub.args.length != args.length) continue;
 
-			var matchingArgs = 0;
+			if(stub.args.length == 0) return stub;
 
+			var matchingArgs = 0;
 
 			for(i in 0...args.length)
 			{
@@ -149,7 +154,6 @@ class MockMethod
 					if(compareArgs(stub.args[i],args[i])) 
 						matchingArgs ++;
 				}
-				
 			}
 
 			if(matchingArgs == stub.args.length)
@@ -160,14 +164,14 @@ class MockMethod
 		return null;
 	}
 
-	public function verify(mode:VerificationMode, ?args:Array<Dynamic>):Bool
+	public function verify(mode:VerificationMode, ?args:Array<Dynamic>, ?pos:PosInfos):Bool
 	{
 		var matchingInvocations = getMatchingArgs(invocations, args);
 
 		var matches:Int = matchingInvocations.length;
 		
 		var range:Range = null;
-		//trace(fieldName + ":" + Std.string(mode) + ": " + Std.string(args) + ", " + count);
+
 		switch(mode)
 		{
 			case times(value):
@@ -187,17 +191,17 @@ class MockMethod
 		if(range.max == null)
 		{
 			if(matches >= range.min) return true;
-			else throw new VerificationException(execptionMessage + "at least " + toTimes(range.min));
+			else throw new VerificationException(execptionMessage + "at least " + toTimes(range.min),pos);
 		}
 		else if(range.min == null)
 		{
 			 if(matches <= range.max) return true;
-			 else throw new VerificationException(execptionMessage + "less than " + toTimes(range.max));
+			 else throw new VerificationException(execptionMessage + "less than " + toTimes(range.max),pos);
 		}
 		else
 		{
 			if(matches == range.min) return true;
-			else throw new VerificationException(execptionMessage + toTimes(range.min));
+			else throw new VerificationException(execptionMessage + toTimes(range.min),pos);
 		}
 		
 		return false;
@@ -214,6 +218,7 @@ class MockMethod
 
 		for(targetArgs in argArrays)
 		{
+
 			if(targetArgs.length != args.length) 
 			{
 				continue;
@@ -264,7 +269,6 @@ class MockMethod
 						case enumOf(en): return isEnumValueOf(actual, en);
 						case instanceOf(c): return Std.is(actual, c);
 						case isNotNull: return actual != null;
-						case isNull: return actual == null;
 						case any: return true;
 						case customMatcher(f): return f(actual);
 					}
@@ -321,15 +325,9 @@ class MockMethod
 typedef Stubbing = 
 {
 	args:Array<Dynamic>,
-	values:Array<StubbingValue>
+	values:Array<MockOutcome>
 }
 
-enum StubbingValue
-{
-	returns(value:Dynamic);
-	throws(value:Dynamic);
-	calls(value:Dynamic);
-}
 
 private class Range
 {
